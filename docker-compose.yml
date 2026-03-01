@@ -1,0 +1,108 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+      timeout: 5s
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      SA_PASSWORD: "Epi@10724"
+      ACCEPT_EULA: "Y"
+    ports:
+      - "1435:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+
+  airflow-init:
+    image: apache/airflow:2.11.1-python3.12
+    command: >
+            bash -c "airflow db upgrade &&
+                airflow users create --username srini --password 'Epi@10724' --firstname srini --lastname srini --role Admin --email shivasri691995@gmail.com || true"
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  airflow-webserver:
+    image: apache/airflow:2.11.1-python3.12
+    command: airflow webserver
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: "GZzjmOM0_2kthK4yFqXhY31xnjAWa9jA71V7W0N6aFs="
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./spark_jobs:/opt/airflow/spark_jobs
+      - bronze_v2:/tmp/bronze_delta
+      - spark_checkpoints:/tmp/spark/checkpoints
+  
+  airflow-scheduler:
+    image: apache/airflow:2.11.1-python3.12
+    command: airflow scheduler
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./spark_jobs:/opt/airflow/spark_jobs
+      - bronze_v2:/tmp/bronze_delta
+      - spark_checkpoints:/tmp/spark/checkpoints
+  
+  spark-master:
+    image: apache/spark:3.5.7
+    container_name: spark-master
+    hostname: spark-master
+    command: >
+      bash -c "/opt/spark/bin/spark-class org.apache.spark.deploy.master.Master"
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    volumes:
+      - ./spark_jobs:/opt/spark/jobs
+      - ./spark_checkpoints:/tmp/spark/checkpoints
+      - bronze_v2:/tmp/bronze_delta   
+      - silver_v2:/tmp/spark/data/silver
+      - gold_v2:/tmp/spark/data/gold
+
+  spark-worker:
+    image: apache/spark:3.5.7
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    volumes:
+      - ./spark_jobs:/opt/spark/jobs
+      - ./spark_checkpoints:/tmp/spark/checkpoints
+      - bronze_v2:/tmp/bronze_delta
+      - silver_v2:/tmp/spark/data/silver
+      - gold_v2:/tmp/spark/data/gold
+  
+volumes:
+  postgres-db-volume:
+  sqlserver-data:
+  spark_checkpoints:
+  bronze_v2:
+  silver_v2:
+  gold_v2:
